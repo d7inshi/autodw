@@ -1,0 +1,2 @@
+[console_scripts]
+autodw = autodw.cli:main
