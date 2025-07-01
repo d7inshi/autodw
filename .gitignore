@@ -1,11 +1,6 @@
-# 在项目根目录创建.gitignore文件
-cat > .gitignore << 'EOF'
-# Ignore these specific files/directories
 setup.py
 pyproject.toml
 tests/
-
-# Standard Python ignores
 __pycache__/
 *.pyc
 *.pyo
@@ -16,8 +11,6 @@ venv/
 dist/
 build/
 *.egg-info/
-
-# IDE files
 .idea/
 .vscode/
 .DS_Store
