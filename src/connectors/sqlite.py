@@ -1,6 +1,8 @@
 import sqlite3
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Union
 from .base import BaseConnector
+import os
+import re
 
 class SQLiteConnector(BaseConnector):
     """SQLite数据库连接器实现"""
@@ -22,6 +24,7 @@ class SQLiteConnector(BaseConnector):
     def disconnect(self):
         if self.connection:
             self.connection.close()
+            self.connection = None  # 关键修复：关闭后将连接置空
             self._log_success("Disconnection")
     
     def get_tables(self) -> List[str]:
@@ -74,21 +77,33 @@ class SQLiteConnector(BaseConnector):
             return []
 
     def get_primary_keys(self, table_name: str) -> List[str]:
-        """获取主键列名列表（按主键顺序）[7,9](@ref)"""
         try:
             cursor = self.connection.cursor()
-            cursor.execute(f"PRAGMA table_info({table_name})")
+            # 1. 查找主键索引（名为 "sqlite_autoindex_<table>_<N>" 的索引）
+            cursor.execute(f"PRAGMA index_list({table_name})")
+            pk_index_name = None
+            for row in cursor.fetchall():
+                if row[1].startswith("sqlite_autoindex"):  # 自动生成的主键索引
+                    pk_index_name = row[1]
+                    break
             
-            # 收集所有主键列及其顺序
+            # 2. 若存在主键索引，提取其包含的列
+            if pk_index_name:
+                cursor.execute(f"PRAGMA index_info({pk_index_name})")
+                # 按索引顺序排序（列在复合主键中的定义顺序）
+                index_rows = sorted(cursor.fetchall(), key=lambda x: x[0])  # 按索引中的顺序号排序
+                return [row[2] for row in index_rows]  # 返回列名
+            
+            # 3. 无主键索引时回退到 PRAGMA table_info
+            cursor.execute(f"PRAGMA table_info({table_name})")
             primary_key_cols = []
             for row in cursor.fetchall():
-                pk_index = row[5]  # 主键顺序值
+                pk_index = row[5]
                 if pk_index > 0:
-                    primary_key_cols.append((pk_index, row[1]))  # (顺序, 列名)
-            
-            # 按主键顺序排序并返回列名列表
+                    primary_key_cols.append((pk_index, row[1]))
             primary_key_cols.sort(key=lambda x: x[0])
-            return [col for _, col in primary_key_cols]
+            return [col for _, col in primary_key_cols] if primary_key_cols else []
+        
         except sqlite3.Error as e:
             self._log_error(f"Get primary keys for {table_name}", e)
             return []
@@ -102,6 +117,19 @@ class SQLiteConnector(BaseConnector):
             self._log_error(f"Execute query: {query}", e)
             return []
     
+    def _extract_db_id(self) -> str:
+        """从db_path解析数据库ID（去掉路径和扩展名）"""
+        # 获取文件名（不带路径）
+        filename = os.path.basename(self.db_path)
+        
+        # 移除扩展名（.sqlite或.db）[6,7](@ref)
+        if filename.endswith(".sqlite"):
+            return filename[:-7]  # 移除7个字符（.sqlite）
+        elif filename.endswith(".db"):
+            return filename[:-3]  # 移除3个字符（.db）
+        else:
+            return filename
+    
     def get_table_schema(self, table_name: str) -> Dict:
         """获取完整表结构描述（包含主键信息）"""
         return {
@@ -110,10 +138,151 @@ class SQLiteConnector(BaseConnector):
             'primary_keys': self.get_primary_keys(table_name),  # 新增主键信息
             'foreign_keys': self.get_foreign_keys(table_name)
         }
+
+    def sample_column_values(
+        self, 
+        table_name: str, 
+        column_name: str, 
+        sample_size: int, 
+        sample_method: str = "random"
+    ) -> List:
+        """
+        采样指定表的列值，支持随机采样和按频率采样
+        :param table_name: 目标表名
+        :param column_name: 目标列名
+        :param sample_size: 采样数量
+        :param sample_method: 采样方法 ("random" 或 "frequency")
+        :return: 采样值列表
+        """
+        if sample_size <= 0:
+            return []
+
+        if sample_method not in ["random", "frequency"]:
+            raise ValueError("采样方法必须是 'random' 或 'frequency'")
+
+        # 安全校验表名和列名（防SQL注入）
+        if not (re.fullmatch(r'\w+', table_name) and re.fullmatch(r'\w+', column_name)):
+            raise ValueError("表名和列名只能包含字母、数字和下划线")
+
+        try:
+            cursor = self.connection.cursor()
+            # 使用双引号包裹标识符，避免SQL关键字冲突
+            if sample_method == "random":
+                query = f'SELECT "{column_name}" FROM "{table_name}" ORDER BY RANDOM() LIMIT ?'
+                cursor.execute(query, (sample_size,))
+            else:  # frequency
+                query = f'''
+                    SELECT "{column_name}" 
+                    FROM "{table_name}" 
+                    GROUP BY "{column_name}" 
+                    ORDER BY COUNT(*) DESC 
+                    LIMIT ?
+                '''
+                cursor.execute(query, (sample_size,))
+            
+            return [row[0] for row in cursor.fetchall()]
+        
+        except sqlite3.Error as e:
+            self._log_error(f"采样 {table_name}.{column_name} ({sample_method})", e)
+            return []
     
-    def get_database_schema(self) -> Dict[str, Dict]:
-        """获取整个数据库的模式描述"""
-        schema = {}
-        for table in self.get_tables():
-            schema[table] = self.get_table_schema(table)
-        return schema
+    def get_database_schema(self, format: str = "default") -> Union[Dict[str, Dict], Dict]:
+        """获取整个数据库的模式描述，支持两种输出格式
+        Args:
+            format: 输出格式，可选"default"或"spider"
+            db_id: 数据库标识符（spider格式需要）
+        
+        Returns:
+            default格式: {表名: {表结构信息}}
+            spider格式: {
+                "column_names": [(表索引, 列名), ...],
+                "column_types": [类型字符串, ...],
+                "db_id": 数据库标识,
+                "foreign_keys": [(列索引, 引用列索引), ...],
+                "primary_keys": [主键列索引, ...],
+                "table_names": [表名, ...]
+            }
+        """
+        if format == "default":
+            schema = {}
+            for table in self.get_tables():
+                schema[table] = self.get_table_schema(table)
+            return schema
+        
+        elif format == "spider":
+            # 从db_path解析db_id（去掉路径和扩展名）
+            db_id = self._extract_db_id()
+            # Spider格式数据结构初始化
+            result = {
+                "column_names_original": [[-1, "*"]],  # 特殊列
+                "column_types": ["text"],     # 特殊列类型
+                "db_id": db_id,
+                "foreign_keys": [],
+                "primary_keys": [],
+                "table_names_original": []
+            }
+            
+            # 辅助数据结构
+            table_name_to_idx = {}
+            column_to_idx = {}  # (table_idx, column_name) -> column_idx
+            ref_map = {}        # (table_name, column_name) -> column_idx
+            
+            # 第一阶段：收集所有表名
+            tables = self.get_tables()
+            result["table_names_original"] = tables
+            table_name_to_idx = {table: idx for idx, table in enumerate(tables)}
+            
+            # 第二阶段：收集所有列信息
+            for table_idx, table in enumerate(tables):
+                table_schema = self.get_table_schema(table)
+                
+                for col_info in table_schema["columns"]:
+                    col_name = col_info["name"]
+                    col_type = col_info["type"].lower()
+                    
+                    # 映射数据库类型到spider的简单类型
+                    if col_type in ("int", "integer", "bigint", "smallint", "tinyint", 
+                                "real", "float", "double", "numeric"):
+                        simple_type = "number"
+                    else:
+                        simple_type = "text"
+                    
+                    # 记录列信息
+                    col_idx = len(result["column_names_original"])
+                    result["column_names_original"].append([table_idx, col_name])
+                    result["column_types"].append(simple_type)
+                    
+                    # 保存映射关系
+                    column_to_idx[(table_idx, col_name)] = col_idx
+                    ref_map[(table, col_name)] = col_idx
+            
+            # 第三阶段：处理主键
+            for table_idx, table in enumerate(tables):
+                table_schema = self.get_table_schema(table)
+                for pk_col in table_schema["primary_keys"]:
+                    if (table_idx, pk_col) in column_to_idx:
+                        col_idx = column_to_idx[(table_idx, pk_col)]
+                        result["primary_keys"].append(col_idx)
+            
+            # 第四阶段：处理外键
+            for table_idx, table in enumerate(tables):
+                table_schema = self.get_table_schema(table)
+                for fk in table_schema["foreign_keys"]:
+                    src_col = fk["column"]
+                    src_table = table
+                    tgt_col = fk["foreign_column"]
+                    tgt_table = fk["foreign_table"]
+                    
+                    # 查找源列和目标列的索引
+                    src_key = (src_table, src_col)
+                    tgt_key = (tgt_table, tgt_col)
+                    
+                    if src_key in ref_map and tgt_key in ref_map:
+                        src_idx = ref_map[src_key]
+                        tgt_idx = ref_map[tgt_key]
+                        result["foreign_keys"].append([src_idx, tgt_idx])
+            
+            return result
+        
+        else:
+            raise ValueError(f"不支持的格式: {format}")
