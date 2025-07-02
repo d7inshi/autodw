@@ -217,6 +217,83 @@ class SQLiteConnector(BaseConnector):
         except sqlite3.Error as e:
             self._log_error(f"采样 {table_name}.{column_name} ({sample_method})", e)
             return []
+
+    def _build_spider_format_schema(
+        self, 
+        include_samples: bool = False, 
+        sample_size: int = 5, 
+        sample_method: str = "random"
+    ) -> Dict:
+        """构建Spider格式的核心逻辑，支持动态扩展采样值"""
+        db_id = self._extract_db_id()
+        result = {
+            "column_names_original": [[-1, "*"]],
+            "column_types": ["text"],
+            "db_id": db_id,
+            "foreign_keys": [],
+            "primary_keys": [],
+            "table_names_original": []
+        }
+        
+        # 若需采样值，则扩展字段
+        if include_samples:
+            result["column_samples"] = []  # 新增采样值字段
+
+        # --- 公共逻辑（表结构/列信息/主外键）--- #
+        tables = self.get_tables()
+        result["table_names_original"] = tables
+        table_name_to_idx = {table: idx for idx, table in enumerate(tables)}
+        column_to_idx = {}
+        ref_map = {}
+
+        for table_idx, table in enumerate(tables):
+            # 动态控制采样行为：include_samples传递至下层
+            table_schema = self.get_table_schema(table, include_samples, sample_size, sample_method)
+            
+            for col_info in table_schema["columns"]:
+                col_name = col_info["name"]
+                col_type = col_info["type"].lower()
+                
+                col_idx = len(result["column_names_original"])
+                result["column_names_original"].append([table_idx, col_name])
+                result["column_types"].append(col_type)
+                
+                # 动态添加采样值（仅在include_samples=True时执行）
+                if include_samples:
+                    result["column_samples"].append({
+                        "column_index": col_idx,
+                        "values": col_info.get("samples", [])
+                    })
+                
+                column_to_idx[(table_idx, col_name)] = col_idx
+                ref_map[(table, col_name)] = col_idx
+        # 处理主键
+        for table_idx, table in enumerate(tables):
+            table_schema = self.get_table_schema(table, include_samples, sample_size, sample_method)
+            for pk_col in table_schema["primary_keys"]:
+                if (table_idx, pk_col) in column_to_idx:
+                    col_idx = column_to_idx[(table_idx, pk_col)]
+                    result["primary_keys"].append(col_idx)
+        
+        # 处理外键
+        for table_idx, table in enumerate(tables):
+            table_schema = self.get_table_schema(table, include_samples, sample_size, sample_method)
+            for fk in table_schema["foreign_keys"]:
+                src_col = fk["column"]
+                src_table = table
+                tgt_col = fk["foreign_column"]
+                tgt_table = fk["foreign_table"]
+                
+                # 查找源列和目标列的索引
+                src_key = (src_table, src_col)
+                tgt_key = (tgt_table, tgt_col)
+                
+                if src_key in ref_map and tgt_key in ref_map:
+                    src_idx = ref_map[src_key]
+                    tgt_idx = ref_map[tgt_key]
+                    result["foreign_keys"].append([src_idx, tgt_idx])
+        
+        return result
     
     def get_database_schema(
         self, 
@@ -225,12 +302,6 @@ class SQLiteConnector(BaseConnector):
         sample_size: int = 5, 
         sample_method: str = "random"
     ) -> Union[Dict[str, Dict], Dict]:
-        """
-        获取整个数据库模式，可选包含采样值
-        :param include_samples: 是否包含列采样值
-        :param sample_size: 采样数量
-        :param sample_method: 采样方法 ("random" 或 "frequency")
-        """
         if format == "default":
             schema = {}
             for table in self.get_tables():
@@ -241,80 +312,14 @@ class SQLiteConnector(BaseConnector):
                     sample_method
                 )
             return schema
-        elif format == "spider":
-            # 从db_path解析db_id（去掉路径和扩展名）
-            db_id = self._extract_db_id()
-            # Spider格式数据结构初始化
-            result = {
-                "column_names_original": [[-1, "*"]],  # 特殊列
-                "column_types": ["text"],     # 特殊列类型
-                "db_id": db_id,
-                "foreign_keys": [],
-                "primary_keys": [],
-                "table_names_original": []
-            }
-            
-            # 辅助数据结构
-            table_name_to_idx = {}
-            column_to_idx = {}  # (table_idx, column_name) -> column_idx
-            ref_map = {}        # (table_name, column_name) -> column_idx
-            
-            # 第一阶段：收集所有表名
-            tables = self.get_tables()
-            result["table_names_original"] = tables
-            table_name_to_idx = {table: idx for idx, table in enumerate(tables)}
-            
-            # 第二阶段：收集所有列信息
-            for table_idx, table in enumerate(tables):
-                table_schema = self.get_table_schema(table)
-                
-                for col_info in table_schema["columns"]:
-                    col_name = col_info["name"]
-                    col_type = col_info["type"].lower()
-                    
-                    # 映射数据库类型到spider的简单类型
-                    if col_type in ("int", "integer", "bigint", "smallint", "tinyint", 
-                                "real", "float", "double", "numeric"):
-                        simple_type = "number"
-                    else:
-                        simple_type = "text"
-                    
-                    # 记录列信息
-                    col_idx = len(result["column_names_original"])
-                    result["column_names_original"].append([table_idx, col_name])
-                    result["column_types"].append(simple_type)
-                    
-                    # 保存映射关系
-                    column_to_idx[(table_idx, col_name)] = col_idx
-                    ref_map[(table, col_name)] = col_idx
-            
-            # 第三阶段：处理主键
-            for table_idx, table in enumerate(tables):
-                table_schema = self.get_table_schema(table)
-                for pk_col in table_schema["primary_keys"]:
-                    if (table_idx, pk_col) in column_to_idx:
-                        col_idx = column_to_idx[(table_idx, pk_col)]
-                        result["primary_keys"].append(col_idx)
-            
-            # 第四阶段：处理外键
-            for table_idx, table in enumerate(tables):
-                table_schema = self.get_table_schema(table)
-                for fk in table_schema["foreign_keys"]:
-                    src_col = fk["column"]
-                    src_table = table
-                    tgt_col = fk["foreign_column"]
-                    tgt_table = fk["foreign_table"]
-                    
-                    # 查找源列和目标列的索引
-                    src_key = (src_table, src_col)
-                    tgt_key = (tgt_table, tgt_col)
-                    
-                    if src_key in ref_map and tgt_key in ref_map:
-                        src_idx = ref_map[src_key]
-                        tgt_idx = ref_map[tgt_key]
-                        result["foreign_keys"].append([src_idx, tgt_idx])
-            
-            return result
+
+        elif format in ("spider", "spider_with_samples"):
+            # 统一入口：动态控制采样行为
+            return self._build_spider_format_schema(
+                include_samples=(format == "spider_with_samples"),  # 关键判断
+                sample_size=sample_size,
+                sample_method=sample_method
+            )
         
         else:
-            raise ValueError(f"不支持的格式: {format}")
+            raise ValueError(f"Unsupported format: {format}")
