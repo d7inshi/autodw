@@ -40,20 +40,45 @@ class SQLiteConnector(BaseConnector):
             self._log_error("Get tables", e)
             return []
     
-    def get_columns(self, table_name: str) -> List[Dict[str, str]]:
+    def get_columns(
+        self, 
+        table_name: str, 
+        include_samples: bool = False, 
+        sample_size: int = 5, 
+        sample_method: str = "random"
+    ) -> List[Dict[str, any]]:
+        """
+        获取表列信息，可选包含采样值
+        :param include_samples: 是否包含采样值
+        :param sample_size: 采样数量
+        :param sample_method: 采样方法 ("random" 或 "frequency")
+        """
         try:
             cursor = self.connection.cursor()
             cursor.execute(f"PRAGMA table_info({table_name})")
             
             columns = []
             for row in cursor.fetchall():
-                columns.append({
+                col_info = {
                     'name': row[1],
                     'type': row[2].upper(),
                     'nullable': not bool(row[3]),
                     'primary_key': bool(row[5]),
                     'default': row[4]
-                })
+                }
+                # 添加采样值
+                if include_samples and sample_size > 0:
+                    try:
+                        col_info['samples'] = self.sample_column_values(
+                            table_name, 
+                            col_info['name'], 
+                            sample_size, 
+                            sample_method
+                        )
+                    except Exception as e:
+                        self._log_error(f"采样列 {table_name}.{col_info['name']} 失败", e)
+                        col_info['samples'] = []
+                columns.append(col_info)
             return columns
         except sqlite3.Error as e:
             self._log_error(f"Get columns for {table_name}", e)
@@ -130,12 +155,23 @@ class SQLiteConnector(BaseConnector):
         else:
             return filename
     
-    def get_table_schema(self, table_name: str) -> Dict:
-        """获取完整表结构描述（包含主键信息）"""
+    def get_table_schema(
+        self, 
+        table_name: str, 
+        include_samples: bool = False, 
+        sample_size: int = 5, 
+        sample_method: str = "random"
+    ) -> Dict:
+        """
+        获取完整表结构描述，可选包含采样值
+        :param include_samples: 是否包含列采样值
+        :param sample_size: 采样数量
+        :param sample_method: 采样方法 ("random" 或 "frequency")
+        """
         return {
             'table': table_name,
-            'columns': self.get_columns(table_name),
-            'primary_keys': self.get_primary_keys(table_name),  # 新增主键信息
+            'columns': self.get_columns(table_name, include_samples, sample_size, sample_method),
+            'primary_keys': self.get_primary_keys(table_name),
             'foreign_keys': self.get_foreign_keys(table_name)
         }
 
@@ -160,10 +196,6 @@ class SQLiteConnector(BaseConnector):
         if sample_method not in ["random", "frequency"]:
             raise ValueError("采样方法必须是 'random' 或 'frequency'")
 
-        # 安全校验表名和列名（防SQL注入）
-        if not (re.fullmatch(r'\w+', table_name) and re.fullmatch(r'\w+', column_name)):
-            raise ValueError("表名和列名只能包含字母、数字和下划线")
-
         try:
             cursor = self.connection.cursor()
             # 使用双引号包裹标识符，避免SQL关键字冲突
@@ -186,29 +218,29 @@ class SQLiteConnector(BaseConnector):
             self._log_error(f"采样 {table_name}.{column_name} ({sample_method})", e)
             return []
     
-    def get_database_schema(self, format: str = "default") -> Union[Dict[str, Dict], Dict]:
-        """获取整个数据库的模式描述，支持两种输出格式
-        Args:
-            format: 输出格式，可选"default"或"spider"
-            db_id: 数据库标识符（spider格式需要）
-        
-        Returns:
-            default格式: {表名: {表结构信息}}
-            spider格式: {
-                "column_names": [(表索引, 列名), ...],
-                "column_types": [类型字符串, ...],
-                "db_id": 数据库标识,
-                "foreign_keys": [(列索引, 引用列索引), ...],
-                "primary_keys": [主键列索引, ...],
-                "table_names": [表名, ...]
-            }
+    def get_database_schema(
+        self, 
+        format: str = "default", 
+        include_samples: bool = False, 
+        sample_size: int = 5, 
+        sample_method: str = "random"
+    ) -> Union[Dict[str, Dict], Dict]:
+        """
+        获取整个数据库模式，可选包含采样值
+        :param include_samples: 是否包含列采样值
+        :param sample_size: 采样数量
+        :param sample_method: 采样方法 ("random" 或 "frequency")
         """
         if format == "default":
             schema = {}
             for table in self.get_tables():
-                schema[table] = self.get_table_schema(table)
+                schema[table] = self.get_table_schema(
+                    table, 
+                    include_samples, 
+                    sample_size, 
+                    sample_method
+                )
             return schema
-        
         elif format == "spider":
             # 从db_path解析db_id（去掉路径和扩展名）
             db_id = self._extract_db_id()
