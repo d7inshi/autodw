@@ -91,14 +91,3 @@ Visit `docs/` directory for:
 > **Technical Support**: Questions? Submit a GitHub Issue  
 > **Project Lead**: d7inshi@outlook.com  
 > **Project Status**: v0.1.1 (Actively Developed)  
-
-Key translation decisions:  
-1. 专业术语保留原意："元数据" → "metadata", "ETL"保留不译  
-2. 技术动作转化："解析" → "parsing", "序列化" → "serialization"  
-3. 动态功能描述："智能抽样" → "Intelligent Sampling"  
-4. 格式统一：版本号/文件名/格式名保留大写格式（v0.1.1 / SQLite / JSON）  
-5. 被动转主动：中文原文"支持"转为英文主动语态"Exports to"/"Supports"  
-6. 符号国际化：中文圆点"•"转为英文星号"•"  
-7. 状态标注：开发阶段说明用"(Actively Developed)"更符合开源习惯  
-
-保留了所有技术符号和格式占位符（如`docs/`、`your_db.sqlite`），确保开发者可以直接复制使用代码片段。
