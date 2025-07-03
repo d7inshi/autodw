@@ -5,7 +5,7 @@ import os
 import re
 
 class SQLiteConnector(BaseConnector):
-    """SQLite数据库连接器实现"""
+    """Implementation of SQLite database connector"""
     def __init__(self, db_path: str):
         super().__init__(db_path)
         self.db_path = db_path
@@ -24,7 +24,7 @@ class SQLiteConnector(BaseConnector):
     def disconnect(self):
         if self.connection:
             self.connection.close()
-            self.connection = None  # 关键修复：关闭后将连接置空
+            self.connection = None  # Critical fix: Set connection to None after closing
             self._log_success("Disconnection")
     
     def get_tables(self) -> List[str]:
@@ -48,10 +48,10 @@ class SQLiteConnector(BaseConnector):
         sample_method: str = "random"
     ) -> List[Dict[str, any]]:
         """
-        获取表列信息，可选包含采样值
-        :param include_samples: 是否包含采样值
-        :param sample_size: 采样数量
-        :param sample_method: 采样方法 ("random" 或 "frequency")
+        Get table column information, optionally including sample values
+        :param include_samples: Whether to include sample values
+        :param sample_size: Number of samples
+        :param sample_method: Sampling method ("random" or "frequency")
         """
         try:
             cursor = self.connection.cursor()
@@ -66,7 +66,7 @@ class SQLiteConnector(BaseConnector):
                     'primary_key': bool(row[5]),
                     'default': row[4]
                 }
-                # 添加采样值
+                # Add sample values
                 if include_samples and sample_size > 0:
                     try:
                         col_info['samples'] = self.sample_column_values(
@@ -92,9 +92,9 @@ class SQLiteConnector(BaseConnector):
             foreign_keys = []
             for row in cursor.fetchall():
                 foreign_keys.append({
-                    'column': row[3],  # 当前表列名
-                    'foreign_table': row[2],  # 外联表名
-                    'foreign_column': row[4]  # 外联列名
+                    'column': row[3],  # Current table column name
+                    'foreign_table': row[2],  # Foreign table name
+                    'foreign_column': row[4]  # Foreign column name
                 })
             return foreign_keys
         except sqlite3.Error as e:
@@ -104,22 +104,22 @@ class SQLiteConnector(BaseConnector):
     def get_primary_keys(self, table_name: str) -> List[str]:
         try:
             cursor = self.connection.cursor()
-            # 1. 查找主键索引（名为 "sqlite_autoindex_<table>_<N>" 的索引）
+             # 1. Find primary key index (index named "sqlite_autoindex_<table>_<N>")
             cursor.execute(f"PRAGMA index_list({table_name})")
             pk_index_name = None
             for row in cursor.fetchall():
-                if row[1].startswith("sqlite_autoindex"):  # 自动生成的主键索引
+                if row[1].startswith("sqlite_autoindex"):  # Auto-generated primary key index
                     pk_index_name = row[1]
                     break
             
-            # 2. 若存在主键索引，提取其包含的列
+            # 2. If primary key index exists, extract its columns
             if pk_index_name:
                 cursor.execute(f"PRAGMA index_info({pk_index_name})")
-                # 按索引顺序排序（列在复合主键中的定义顺序）
-                index_rows = sorted(cursor.fetchall(), key=lambda x: x[0])  # 按索引中的顺序号排序
-                return [row[2] for row in index_rows]  # 返回列名
+                # Sort by index order (definition order in composite keys)
+                index_rows = sorted(cursor.fetchall(), key=lambda x: x[0])  # Sort by sequence number in index
+                return [row[2] for row in index_rows]  # Return column names
             
-            # 3. 无主键索引时回退到 PRAGMA table_info
+            # 3. Fallback to PRAGMA table_info if no primary key index exists
             cursor.execute(f"PRAGMA table_info({table_name})")
             primary_key_cols = []
             for row in cursor.fetchall():
@@ -143,15 +143,15 @@ class SQLiteConnector(BaseConnector):
             return []
     
     def _extract_db_id(self) -> str:
-        """从db_path解析数据库ID（去掉路径和扩展名）"""
-        # 获取文件名（不带路径）
+        """Extract database ID from db_path (remove path and extension)"""
+        # Get filename without path
         filename = os.path.basename(self.db_path)
         
-        # 移除扩展名（.sqlite或.db）[6,7](@ref)
+        # Remove extension (.sqlite or .db) 
         if filename.endswith(".sqlite"):
-            return filename[:-7]  # 移除7个字符（.sqlite）
+            return filename[:-7]  # Remove 7 characters (.sqlite)
         elif filename.endswith(".db"):
-            return filename[:-3]  # 移除3个字符（.db）
+            return filename[:-3]  # Remove 3 characters (.db)
         else:
             return filename
     
@@ -163,10 +163,10 @@ class SQLiteConnector(BaseConnector):
         sample_method: str = "random"
     ) -> Dict:
         """
-        获取完整表结构描述，可选包含采样值
-        :param include_samples: 是否包含列采样值
-        :param sample_size: 采样数量
-        :param sample_method: 采样方法 ("random" 或 "frequency")
+        Get complete table schema description, optionally including sample values
+        :param include_samples: Whether to include column sample values
+        :param sample_size: Number of samples
+        :param sample_method: Sampling method ("random" or "frequency")
         """
         return {
             'table': table_name,
@@ -182,23 +182,23 @@ class SQLiteConnector(BaseConnector):
         sample_size: int, 
         sample_method: str = "random"
     ) -> List:
-        """
-        采样指定表的列值，支持随机采样和按频率采样
-        :param table_name: 目标表名
-        :param column_name: 目标列名
-        :param sample_size: 采样数量
-        :param sample_method: 采样方法 ("random" 或 "frequency")
-        :return: 采样值列表
+         """
+        Sample column values from specified table, supports random sampling and frequency-based sampling
+        :param table_name: Target table name
+        :param column_name: Target column name
+        :param sample_size: Number of samples
+        :param sample_method: Sampling method ("random" or "frequency")
+        :return: List of sampled values
         """
         if sample_size <= 0:
             return []
 
         if sample_method not in ["random", "frequency"]:
-            raise ValueError("采样方法必须是 'random' 或 'frequency'")
+            raise ValueError("Sampling method must be 'random' or 'frequency'")
 
         try:
             cursor = self.connection.cursor()
-            # 使用双引号包裹标识符，避免SQL关键字冲突
+            # Use double quotes for identifiers to avoid SQL keyword conflicts
             if sample_method == "random":
                 query = f'SELECT "{column_name}" FROM "{table_name}" ORDER BY RANDOM() LIMIT ?'
                 cursor.execute(query, (sample_size,))
@@ -215,7 +215,7 @@ class SQLiteConnector(BaseConnector):
             return [row[0] for row in cursor.fetchall()]
         
         except sqlite3.Error as e:
-            self._log_error(f"采样 {table_name}.{column_name} ({sample_method})", e)
+            self._log_error(f"Sampling {table_name}.{column_name} ({sample_method})", e)
             return []
 
     def _build_spider_format_schema(
@@ -224,7 +224,7 @@ class SQLiteConnector(BaseConnector):
         sample_size: int = 5, 
         sample_method: str = "random"
     ) -> Dict:
-        """构建Spider格式的核心逻辑，支持动态扩展采样值"""
+        """Core logic to build Spider format schema, supports dynamic sampling extension"""
         db_id = self._extract_db_id()
         result = {
             "column_names_original": [[-1, "*"]],
@@ -235,11 +235,11 @@ class SQLiteConnector(BaseConnector):
             "table_names_original": []
         }
         
-        # 若需采样值，则扩展字段
+        # If sampling is needed, extend the fields
         if include_samples:
-            result["column_samples"] = []  # 新增采样值字段
+            result["column_samples"] = []  # New field for sample values
 
-        # --- 公共逻辑（表结构/列信息/主外键）--- #
+        # --- Common logic (table structure/column info/primary-foreign keys) --- #
         tables = self.get_tables()
         result["table_names_original"] = tables
         table_name_to_idx = {table: idx for idx, table in enumerate(tables)}
@@ -247,7 +247,7 @@ class SQLiteConnector(BaseConnector):
         ref_map = {}
 
         for table_idx, table in enumerate(tables):
-            # 动态控制采样行为：include_samples传递至下层
+            # Dynamically control sampling behavior: pass include_samples to lower layer
             table_schema = self.get_table_schema(table, include_samples, sample_size, sample_method)
             
             for col_info in table_schema["columns"]:
@@ -258,7 +258,7 @@ class SQLiteConnector(BaseConnector):
                 result["column_names_original"].append([table_idx, col_name])
                 result["column_types"].append(col_type)
                 
-                # 动态添加采样值（仅在include_samples=True时执行）
+                # Dynamically add sample values (only executed when include_samples=True)
                 if include_samples:
                     result["column_samples"].append({
                         "column_index": col_idx,
@@ -267,7 +267,7 @@ class SQLiteConnector(BaseConnector):
                 
                 column_to_idx[(table_idx, col_name)] = col_idx
                 ref_map[(table, col_name)] = col_idx
-        # 处理主键
+        # Process primary keys
         for table_idx, table in enumerate(tables):
             table_schema = self.get_table_schema(table, include_samples, sample_size, sample_method)
             for pk_col in table_schema["primary_keys"]:
@@ -275,7 +275,7 @@ class SQLiteConnector(BaseConnector):
                     col_idx = column_to_idx[(table_idx, pk_col)]
                     result["primary_keys"].append(col_idx)
         
-        # 处理外键
+        # Process foreign keys
         for table_idx, table in enumerate(tables):
             table_schema = self.get_table_schema(table, include_samples, sample_size, sample_method)
             for fk in table_schema["foreign_keys"]:
@@ -284,7 +284,7 @@ class SQLiteConnector(BaseConnector):
                 tgt_col = fk["foreign_column"]
                 tgt_table = fk["foreign_table"]
                 
-                # 查找源列和目标列的索引
+                # Find source and target column indices
                 src_key = (src_table, src_col)
                 tgt_key = (tgt_table, tgt_col)
                 
@@ -314,9 +314,9 @@ class SQLiteConnector(BaseConnector):
             return schema
 
         elif format in ("spider", "spider_with_samples"):
-            # 统一入口：动态控制采样行为
+            # Unified entry: dynamically control sampling behavior
             return self._build_spider_format_schema(
-                include_samples=(format == "spider_with_samples"),  # 关键判断
+                include_samples=(format == "spider_with_samples"),  # Key determination
                 sample_size=sample_size,
                 sample_method=sample_method
             )

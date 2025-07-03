@@ -6,44 +6,44 @@ import logging
 logger = logging.getLogger("autodw.serializers")
 
 class Serializer(ABC):
-    """数据库模式序列化抽象基类"""
+    """Abstract base class for database schema serialization"""
     
     @abstractmethod
     def serialize(self, schema_data: Dict[str, Any], db_name: str = "database") -> str:
         """
-        将数据库模式数据序列化为特定格式
+        Serialize database schema data into a specific format
         
-        参数:
-            schema_data: 从连接器获取的原始模式数据
-            db_name: 数据库名称
+        Args:
+            schema_data: Raw schema data obtained from the connector
+            db_name: Database name
             
-        返回:
-            序列化后的字符串
+        Returns:
+            Serialized string
         """
         pass
 
 
 class BaseSerializer(Serializer):
-    """BASE_FORMAT序列化器实现"""
+    """Implementation of BASE_FORMAT serializer"""
     
     def serialize(self, schema_data: Dict[str, Any], db_name: str = "database") -> str:
         """
-        生成BASE_FORMAT格式的序列化字符串:
-          表名: 列1 (样例1, 样例2), 列2 (样例3, 样例4) | 外键关系
+        Generate serialized string in BASE_FORMAT format:
+          Table name: Column1 (sample1, sample2), Column2 (sample3, sample4) | Foreign key relationships
         """
-        # 1. 处理表数据
+        # 1. Process table data
         table_strings = []
         for table_name, table_data in schema_data.items():
             column_strings = []
             
             for column in table_data["columns"]:
-                # 处理样例数据
+                # Process sample data
                 samples = ", ".join(map(str, column.get("samples", [])[:3]))
                 column_strings.append(f"{column['name']} ({samples})")
             
             table_strings.append(f"{table_name} : {', '.join(column_strings)}")
         
-        # 2. 处理外键关系
+        # 2. Process foreign key relationships
         foreign_keys = []
         for table_name, table_data in schema_data.items():
             for fk in table_data["foreign_keys"]:
@@ -51,12 +51,12 @@ class BaseSerializer(Serializer):
                     f"{table_name}.{fk['column']}={fk['foreign_table']}.{fk['foreign_column']}"
                 )
         
-        # 3. 组合所有部分
+        # 3. Combine all parts
         return " | ".join(table_strings + foreign_keys)
 
 
 class DatabaseSchemaSerializer:
-    """直接连接数据库生成序列化输出的高级接口"""
+    """High-level interface for generating serialized output directly from database connection"""
     
     def __init__(
         self, 
@@ -68,17 +68,17 @@ class DatabaseSchemaSerializer:
         sample_method: str = "random"
     ):
         """
-        初始化数据库模式序列化器
+        Initialize database schema serializer
         
-        参数:
-            connector: 数据库连接器实例
-            serializer_class: 序列化类型 (BaseSerializer 或 MSchemaSerializer)
-            db_name: 自定义数据库名称 (默认为连接器提取的ID)
-            include_samples: 是否包含样例数据
-            sample_size: 样例数据数量
-            sample_method: 采样方法 ("random" 或 "frequency")
+        Args:
+            connector: Database connector instance
+            serializer_class: Serializer type (BaseSerializer or MSchemaSerializer)
+            db_name: Custom database name (defaults to connector extracted ID)
+            include_samples: Whether to include sample data
+            sample_size: Number of samples
+            sample_method: Sampling method ("random" or "frequency")
         """
-        assert serializer_type in ["default", "mschema"], "序列化类型不存在"
+        assert serializer_type in ["default", "mschema"], "Serializer type not supported"
         if serializer_type == "mschema":
             self.serializer_class = MSchemaSerializer
         else:
@@ -90,20 +90,20 @@ class DatabaseSchemaSerializer:
         self.sample_method = sample_method
         
     def connect(self):
-        """建立数据库连接"""
+        """Establish database connection"""
         if not self.connector.connect():
-            raise ConnectionError("数据库连接失败")
+            raise ConnectionError("Database connection failed")
     
     def disconnect(self):
-        """关闭数据库连接"""
+        """Close database connection"""
         self.connector.disconnect()
     
     def generate(self) -> str:
-        """获取序列化输出"""
+        """Get serialized output"""
         try:
             self.connect()
             
-            # 获取数据库模式
+            # Get database schema
             schema_data = self.connector.get_database_schema(
                 format="default",
                 include_samples=self.include_samples,
@@ -111,17 +111,17 @@ class DatabaseSchemaSerializer:
                 sample_method=self.sample_method
             )
             
-            # 确定数据库名称
+            # Determine database name
             db_name = self.db_name or getattr(
                 self.connector, "_extract_db_id", lambda: "database"
             )()
             
-            # 使用指定序列化器生成输出
+            # Generate output using specified serializer
             serializer = self.serializer_class()
             return serializer.serialize(schema_data, db_name)
             
         except Exception as e:
-            logger.error(f"序列化失败: {str(e)}")
+            logger.error(f"Serialization failed: {str(e)}")
             raise
         finally:
             self.disconnect()
@@ -134,50 +134,50 @@ class DatabaseSchemaSerializer:
         self.disconnect()
 
 class MSchemaSerializer(Serializer):
-    """M_SCHEMA_FORMAT序列化器实现"""
+    """Implementation of M_SCHEMA_FORMAT serializer"""
     
     def serialize(self, schema_data: Dict[str, Any], db_name: str = "database") -> str:
         """
-        生成M_SCHEMA_FORMAT格式的序列化字符串:
+        Generate serialized string in M_SCHEMA_FORMAT format:
           [DB_ID] db_name
           [Schema]
           #Table: table_name
           [
-            (列定义),
+            (column definition),
             ...
           ]
           [Foreign keys]
-          外键关系
+          Foreign key relationships
         """
-        # 1. 数据库标识头
+        # 1. Database identification header
         result = [f"[DB_ID] {db_name}", "[Schema]"]
         
-        # 2. 处理每个表
+        # 2. Process each table
         for table_name, table_data in schema_data.items():
             result.append(f"#Table: {table_name}")
             result.append("[")
             
-            # 处理列
+            # Process columns
             for column in table_data["columns"]:
-                # 构建列描述
+                # Build column description
                 description_parts = []
                 
-                # 数据类型
+                # Data type
                 desc = f"{column['name']}: {column['type']}"
                 
-                # 主键标识
+                # Primary key indicator
                 if column['name'] in table_data["primary_keys"]:
                     desc += ", Primary Key"
                 
-                # 可空性
+                # Nullability
                 desc += ", NOT NULL" if not column['nullable'] else ", NULL"
                 
-                # 外键映射
+                # Foreign key mapping
                 for fk in table_data["foreign_keys"]:
                     if fk['column'] == column['name']:
                         desc += f", Maps to {fk['foreign_table']}({fk['foreign_column']})"
                 
-                # 添加示例数据
+                # Add sample data
                 samples = ", ".join(map(str, column.get("samples", [])[:3]))
                 desc += f", Examples: [{samples}]"
                 
@@ -185,7 +185,7 @@ class MSchemaSerializer(Serializer):
             
             result.append("]")
         
-        # 3. 外键关系部分
+        # 3. Foreign keys section
         result.append("[Foreign keys]")
         foreign_keys = []
         for table_name, table_data in schema_data.items():
