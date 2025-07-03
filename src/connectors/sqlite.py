@@ -182,14 +182,15 @@ class SQLiteConnector(BaseConnector):
         sample_size: int, 
         sample_method: str = "random"
     ) -> List:
-         """
-        Sample column values from specified table, supports random sampling and frequency-based sampling
-        :param table_name: Target table name
-        :param column_name: Target column name
-        :param sample_size: Number of samples
-        :param sample_method: Sampling method ("random" or "frequency")
-        :return: List of sampled values
         """
+            Sample column values from specified table, supports random sampling and frequency-based sampling
+            :param table_name: Target table name
+            :param column_name: Target column name
+            :param sample_size: Number of samples
+            :param sample_method: Sampling method ("random" or "frequency")
+            :return: List of sampled values
+        """
+
         if sample_size <= 0:
             return []
 
@@ -294,32 +295,198 @@ class SQLiteConnector(BaseConnector):
                     result["foreign_keys"].append([src_idx, tgt_idx])
         
         return result
-    
+
     def get_database_schema(
         self, 
         format: str = "default", 
         include_samples: bool = False, 
         sample_size: int = 5, 
-        sample_method: str = "random"
+        sample_method: str = "random",
+        exclude_tables: Optional[List[str]] = None,
+        exclude_columns: Optional[Dict[str, List[str]]] = None
     ) -> Union[Dict[str, Dict], Dict]:
+        """
+        Retrieve database schema with options to exclude specific tables or columns.
+        Automatically handles foreign key relationships when excluding referenced entities.
+        
+        Args:
+            format: Output format ("default" or "spider"/"spider_with_samples")
+            include_samples: Include sample values in column data
+            sample_size: Number of sample values per column
+            sample_method: Sampling method ("random" or "frequency")
+            exclude_tables: List of table names to exclude
+            exclude_columns: Dictionary of {table_name: [columns]} to exclude
+            
+        Returns:
+            Schema dictionary with excluded tables/columns and cleaned foreign keys
+        """
+        # Initialize exclusion parameters
+        exclude_tables = exclude_tables or []
+        exclude_columns = exclude_columns or {}
+        
+        # Process default format schema
         if format == "default":
             schema = {}
             for table in self.get_tables():
-                schema[table] = self.get_table_schema(
+                # Skip excluded tables
+                if table in exclude_tables:
+                    continue  
+                    
+                table_schema = self.get_table_schema(
                     table, 
                     include_samples, 
                     sample_size, 
                     sample_method
                 )
+                
+                # Filter excluded columns
+                if table in exclude_columns:
+                    cols_to_exclude = set(exclude_columns[table])
+                    table_schema['columns'] = [
+                        col for col in table_schema['columns']
+                        if col['name'] not in cols_to_exclude
+                    ]
+                    
+                    # Update primary keys if excluded
+                    table_schema['primary_keys'] = [
+                        pk for pk in table_schema['primary_keys']
+                        if pk not in cols_to_exclude
+                    ]
+                
+                # Clean foreign keys (both local and referenced)
+                valid_fks = []
+                for fk in table_schema['foreign_keys']:
+                    # Skip if FK references an excluded table
+                    if fk['foreign_table'] in exclude_tables:
+                        continue
+                        
+                    # Skip if either local or foreign column is excluded
+                    local_excluded = (table in exclude_columns and 
+                                    fk['column'] in exclude_columns[table])
+                    foreign_excluded = (fk['foreign_table'] in exclude_columns and 
+                                    fk['foreign_column'] in exclude_columns[fk['foreign_table']])
+                    
+                    if not (local_excluded or foreign_excluded):
+                        valid_fks.append(fk)
+                
+                table_schema['foreign_keys'] = valid_fks
+                schema[table] = table_schema
+                
             return schema
 
+        # Process spider format schema
         elif format in ("spider", "spider_with_samples"):
-            # Unified entry: dynamically control sampling behavior
-            return self._build_spider_format_schema(
-                include_samples=(format == "spider_with_samples"),  # Key determination
+            schema = self._build_spider_format_schema(
+                include_samples=(format == "spider_with_samples"),
                 sample_size=sample_size,
                 sample_method=sample_method
             )
-        
+            
+            # Create quick lookup structures
+            table_idx_map = {table: idx for idx, table in enumerate(schema['table_names_original'])}
+            col_idx_map = {}
+            for idx, (tbl_idx, col_name) in enumerate(schema['column_names_original']):
+                if tbl_idx == -1:  # Skip virtual row
+                    continue
+                table_name = schema['table_names_original'][tbl_idx]
+                col_idx_map[(table_name, col_name)] = idx
+
+            # Filter tables and columns
+            new_tables = []
+            new_columns = []
+            new_column_types = []
+            tbl_idx_mapping = {}  # Old index → new index
+            col_idx_mapping = {}  # Old index → new index
+            
+            # Build new table list and mapping
+            for old_idx, table in enumerate(schema['table_names_original']):
+                if table in exclude_tables:
+                    continue
+                new_idx = len(new_tables)
+                tbl_idx_mapping[old_idx] = new_idx
+                new_tables.append(table)
+            
+            # Build new column list and mapping
+            for old_idx, col_def in enumerate(schema['column_names_original']):
+                tbl_idx, col_name = col_def
+                # Handle virtual row
+                if tbl_idx == -1:  
+                    new_columns.append(col_def)
+                    new_column_types.append(schema['column_types'][old_idx])
+                    col_idx_mapping[old_idx] = len(new_columns) - 1
+                    continue
+                    
+                table_name = schema['table_names_original'][tbl_idx]
+                # Skip excluded tables/columns
+                if (table_name in exclude_tables or 
+                    (table_name in exclude_columns and col_name in exclude_columns[table_name])):
+                    continue
+                    
+                # Update table index reference
+                new_tbl_idx = tbl_idx_mapping.get(tbl_idx, tbl_idx)
+                new_col_def = [new_tbl_idx, col_name]
+                
+                new_columns.append(new_col_def)
+                new_column_types.append(schema['column_types'][old_idx])
+                col_idx_mapping[old_idx] = len(new_columns) - 1
+            
+            # Filter primary keys
+            new_pks = []
+            for pk_idx in schema['primary_keys']:
+                if pk_idx not in col_idx_mapping:
+                    continue
+                new_pks.append(col_idx_mapping[pk_idx])
+            
+            # Filter foreign keys
+            new_fks = []
+            for src_idx, tgt_idx in schema['foreign_keys']:
+                # Skip if either end of FK is excluded
+                if src_idx not in col_idx_mapping or tgt_idx not in col_idx_mapping:
+                    continue
+                
+                # Get table-column references
+                src_tbl_idx, src_col = new_columns[col_idx_mapping[src_idx]]
+                tgt_tbl_idx, tgt_col = new_columns[col_idx_mapping[tgt_idx]]
+                src_table = new_tables[src_tbl_idx] if src_tbl_idx != -1 else None
+                tgt_table = new_tables[tgt_tbl_idx] if tgt_tbl_idx != -1 else None
+                
+                # Skip if either column is excluded in its table
+                src_excluded = (src_table in exclude_columns and 
+                            src_col in exclude_columns[src_table])
+                tgt_excluded = (tgt_table in exclude_columns and 
+                            tgt_col in exclude_columns[tgt_table])
+                
+                if not (src_excluded or tgt_excluded):
+                    new_fks.append([
+                        col_idx_mapping[src_idx],
+                        col_idx_mapping[tgt_idx]
+                    ])
+            
+            # Update samples if present
+            new_samples = []
+            if "column_samples" in schema:
+                for sample_info in schema["column_samples"]:
+                    col_idx = sample_info["column_index"]
+                    if col_idx in col_idx_mapping:
+                        new_samples.append({
+                            "column_index": col_idx_mapping[col_idx],
+                            "values": sample_info["values"]
+                        })
+            
+            # Build final schema
+            filtered_schema = {
+                "column_names_original": new_columns,
+                "column_types": new_column_types,
+                "db_id": schema['db_id'],
+                "foreign_keys": new_fks,
+                "primary_keys": new_pks,
+                "table_names_original": new_tables
+            }
+            
+            if new_samples:
+                filtered_schema["column_samples"] = new_samples
+            
+            return filtered_schema
+            
         else:
             raise ValueError(f"Unsupported format: {format}")

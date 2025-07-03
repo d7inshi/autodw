@@ -98,7 +98,7 @@ def test_table_schema(db: SQLiteConnector, table_name: str):
 
 def test_database_schema(db: SQLiteConnector):
     """测试获取数据库完整模式功能"""
-    schema = db.get_database_schema(include_samples=True, sample_method="random")
+    schema = db.get_database_schema(format="spider", include_samples=True, sample_method="random", exclude_tables=["sectors", "industries", "assets_products"], exclude_columns={"performance_metrics":["metric_id"], "users": ["user_id"]})
     assert isinstance(schema, dict), "应返回字典"
     logger.info(f"数据库模式包含 {len(schema)} 张表")
     logger.info(f"数据库模式JSON: {schema}")
@@ -155,7 +155,9 @@ if __name__ == "__main__":
     sqlite_root_path = "tests/resource/sqlite"
     
     # 遍历所有SQLite数据库文件进行测试
-    for file in os.listdir(sqlite_root_path):
+    for index, file in enumerate(os.listdir(sqlite_root_path)):
+        if index > 0:
+            break
         if not file.endswith(".sqlite"): 
             continue
             

@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Union, Type
+from typing import Dict, Any, Union, Type, Optional, List
 from ..connectors.base import BaseConnector
 import logging
 
@@ -56,7 +56,7 @@ class BaseSerializer(Serializer):
 
 
 class DatabaseSchemaSerializer:
-    """High-level interface for generating serialized output directly from database connection"""
+    """High-level interface for generating serialized output with table/column exclusion"""
     
     def __init__(
         self, 
@@ -65,29 +65,32 @@ class DatabaseSchemaSerializer:
         db_name: str = None,
         include_samples: bool = True,
         sample_size: int = 3,
-        sample_method: str = "random"
+        sample_method: str = "random",
+        exclude_tables: Optional[List[str]] = None,
+        exclude_columns: Optional[Dict[str, List[str]]] = None
     ):
         """
         Initialize database schema serializer
         
         Args:
             connector: Database connector instance
-            serializer_class: Serializer type (BaseSerializer or MSchemaSerializer)
-            db_name: Custom database name (defaults to connector extracted ID)
-            include_samples: Whether to include sample data
-            sample_size: Number of samples
+            serializer_type: Serializer type ("default" or "mschema")
+            db_name: Custom database name
+            include_samples: Include sample data in columns
+            sample_size: Number of samples per column
             sample_method: Sampling method ("random" or "frequency")
+            exclude_tables: Tables to exclude from schema
+            exclude_columns: Columns to exclude per table {table: [columns]}
         """
         assert serializer_type in ["default", "mschema"], "Serializer type not supported"
-        if serializer_type == "mschema":
-            self.serializer_class = MSchemaSerializer
-        else:
-            self.serializer_class = BaseSerializer
+        self.serializer_class = MSchemaSerializer if serializer_type == "mschema" else BaseSerializer
         self.connector = connector
         self.db_name = db_name
         self.include_samples = include_samples
         self.sample_size = sample_size
         self.sample_method = sample_method
+        self.exclude_tables = exclude_tables or []
+        self.exclude_columns = exclude_columns or {}
         
     def connect(self):
         """Establish database connection"""
@@ -99,16 +102,18 @@ class DatabaseSchemaSerializer:
         self.connector.disconnect()
     
     def generate(self) -> str:
-        """Get serialized output"""
+        """Generate serialized schema with exclusions"""
         try:
             self.connect()
             
-            # Get database schema
+            # Get database schema with exclusions
             schema_data = self.connector.get_database_schema(
                 format="default",
                 include_samples=self.include_samples,
                 sample_size=self.sample_size,
-                sample_method=self.sample_method
+                sample_method=self.sample_method,
+                exclude_tables=self.exclude_tables,
+                exclude_columns=self.exclude_columns
             )
             
             # Determine database name

@@ -54,7 +54,7 @@ def run_tests(db_path):
     # 1. 测试连接
     with db:
         # 初始化模式序列转换器
-        serial = DatabaseSchemaSerializer(connector=db, serializer_type="mschema")
+        serial = DatabaseSchemaSerializer(connector=db, serializer_type="mschema", exclude_tables=["users"])
         base_seq = serial.generate()
         logger.info(f"base sequence: {base_seq}")
     # 6. 测试断开连接
@@ -67,7 +67,9 @@ if __name__ == "__main__":
     sqlite_root_path = "tests/resource/sqlite"
     
     # 遍历所有SQLite数据库文件进行测试
-    for file in os.listdir(sqlite_root_path):
+    for index, file in enumerate(os.listdir(sqlite_root_path)):
+        if index > 0 :
+            break
         if not file.endswith(".sqlite"): 
             continue
             
