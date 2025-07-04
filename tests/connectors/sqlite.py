@@ -1,4 +1,4 @@
-from src.connectors.sqlite import SQLiteConnector
+from autodw.connectors.sqlite import SQLiteConnector
 import os
 import logging
 
